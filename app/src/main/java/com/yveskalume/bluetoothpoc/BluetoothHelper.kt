@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -25,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -108,6 +108,10 @@ class BluetoothHelper(private val context: Context) {
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val bluetoothAdapter = bluetoothManager.adapter
 
+    private val scanSettings = ScanSettings.Builder()
+        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+        .build()
+
     private val bluetoothLeScanner by lazy {
         bluetoothAdapter.bluetoothLeScanner
     }
@@ -158,9 +162,7 @@ class BluetoothHelper(private val context: Context) {
 
         withContext(Dispatchers.IO) {
             launch { getPairedDevices() }
-            bluetoothLeScanner.startScan(scanCallback)
-            delay(20000)
-            bluetoothLeScanner.stopScan(scanCallback)
+            bluetoothLeScanner.startScan(null, scanSettings, scanCallback)
             _isScanning.value = false
         }
     }
@@ -175,14 +177,24 @@ class BluetoothHelper(private val context: Context) {
     }
 
     private val connectGattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.e("Helper", "Connected")
+                Log.d(TAG, "Connected")
+                gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.e("Helper", "Disconnected")
+                Log.e(TAG, "Disconnected")
+                gatt.close()
             }
 
             _devicePairingWith.update { null }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                gatt.printGattTable()
+            } else {
+                Log.d(TAG, "onServicesDiscovered received: $status")
+            }
         }
     }
 
@@ -191,6 +203,7 @@ class BluetoothHelper(private val context: Context) {
             try {
                 val device = adapter.getRemoteDevice(address)
                 bluetoothGatt = device.connectGatt(context, false, connectGattCallback)
+                bluetoothLeScanner.stopScan(scanCallback)
                 return true
             } catch (exception: IllegalArgumentException) {
                 Log.w("Helper", "Device not found with provided address.")
@@ -202,7 +215,15 @@ class BluetoothHelper(private val context: Context) {
         }
     }
 
+    fun disconnect() {
+        bluetoothGatt.disconnect()
+    }
+
     private fun hasPermission(permission: String): Boolean {
         return context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        const val TAG = "BluetoothHelper"
     }
 }
