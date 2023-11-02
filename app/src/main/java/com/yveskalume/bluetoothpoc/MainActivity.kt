@@ -35,38 +35,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-//    private var bluetoothService: BluetoothService? = null
-//
-//    private val serviceConnection: ServiceConnection = object : ServiceConnection {
-//        override fun onServiceConnected(
-//            componentName: ComponentName,
-//            service: IBinder
-//        ) {
-//            bluetoothService = (service as BluetoothService.LocalBinder).getService()
-//            bluetoothService?.let { bluetooth ->
-//                if (!bluetooth.initialize()) {
-//                    Log.e("MainActivity", "Unable to initialize Bluetooth")
-//                    finish()
-//                }
-//
-//                bluetooth.connect(deviceAddress)
-//
-//            }
-//        }
-//
-//        override fun onServiceDisconnected(componentName: ComponentName) {
-//            bluetoothService = null
-//        }
-//    }
-
     @OptIn(ExperimentalFoundationApi::class)
     @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-//        val gattServiceIntent = Intent(this, BluetoothService::class.java)
-//        bindService(gattServiceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
-
         setContent {
             BluetoothPOCTheme {
                 Surface(
@@ -74,9 +46,8 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val bluetoothHelper = rememberBluetoothHelper()
-                    val pairedDevices by bluetoothHelper.pairedDevicesFlow.collectAsState()
                     val scannedDevices by bluetoothHelper.scannedDevicesFlow.collectAsState()
-                    val devicePairingWith by bluetoothHelper.devicePairingWith.collectAsState()
+                    val deviceConnectingWith by bluetoothHelper.deviceConnectingWith.collectAsState()
 
                     val isScanning by bluetoothHelper.isScanning.collectAsState()
 
@@ -87,43 +58,11 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(8.dp)
                     ) {
-                        stickyHeader {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Paired Devices",
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                        }
-                        items(pairedDevices.toList()) { device ->
-                            Card(
-                                modifier = Modifier
-                                    .padding(8.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .wrapContentHeight()
-                                        .fillMaxWidth()
-                                        .padding(8.dp)
-                                ) {
-                                    Text(text = "Device Name: ${device.name}")
-                                    Text(text = "Device Address: ${device.address}")
-                                    Button(onClick = {
-
-                                    }) {
-                                        Text(text = "Unpair Device")
-                                    }
-                                }
-                            }
-                        }
-
 
                         stickyHeader {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Scanned Devices",
+                                text = "Devices",
                                 style = MaterialTheme.typography.titleLarge,
                                 modifier = Modifier.padding(horizontal = 8.dp)
                             )
@@ -131,7 +70,7 @@ class MainActivity : ComponentActivity() {
 
                         }
                         items(scannedDevices.toList()) { device ->
-                            val isPairing = devicePairingWith == device.address
+                            val isConnecting = deviceConnectingWith == device.address
                             Card(
                                 modifier = Modifier
                                     .padding(8.dp)
@@ -145,7 +84,7 @@ class MainActivity : ComponentActivity() {
                                     Text(text = "Device Name: ${device.name}")
                                     Text(text = "Device Address: ${device.address}")
                                     Button(
-                                        enabled = devicePairingWith == null,
+                                        enabled = deviceConnectingWith == null,
                                         onClick = {
                                             coroutineScope.launch {
                                                 bluetoothHelper.connect(device.address)
@@ -153,13 +92,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                     ) {
                                         Text(
-                                            text = if (isPairing) {
-                                                "Pairing"
+                                            text = if (isConnecting) {
+                                                "Connecting..."
                                             } else {
-                                                "Pair Device"
+                                                "Connect"
                                             }
                                         )
-                                        if (isPairing) {
+                                        if (isConnecting) {
                                             Spacer(modifier = Modifier.width(2.dp))
                                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
                                         }

@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
@@ -116,7 +117,7 @@ class BluetoothHelper(private val context: Context) {
         bluetoothAdapter.bluetoothLeScanner
     }
 
-    lateinit var bluetoothGatt: BluetoothGatt
+    private lateinit var bluetoothGatt: BluetoothGatt
 
 
     val isBluetoothEnabled: Boolean
@@ -126,29 +127,12 @@ class BluetoothHelper(private val context: Context) {
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    private val _pairedDevicesFlow = MutableStateFlow<Set<BluetoothDevice>>(emptySet())
-    val pairedDevicesFlow: StateFlow<Set<BluetoothDevice>> = _pairedDevicesFlow.asStateFlow()
-
     private val _scannedDevicesFlow = MutableStateFlow<Set<BluetoothDevice>>(emptySet())
     val scannedDevicesFlow: StateFlow<Set<BluetoothDevice>> = _scannedDevicesFlow.asStateFlow()
 
 
-    private val _devicePairingWith = MutableStateFlow<String?>(null)
-    val devicePairingWith: StateFlow<String?> = _devicePairingWith.asStateFlow()
-
-    private fun getPairedDevices() {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            return
-        }
-        val pairedDevices = bluetoothAdapter.bondedDevices
-        _pairedDevicesFlow.update {
-            pairedDevices
-        }
-    }
-
-    fun unpairDevice(device: BluetoothDevice) {
-        device.createBond()
-    }
+    private val _deviceConnectingWith = MutableStateFlow<String?>(null)
+    val deviceConnectingWith: StateFlow<String?> = _deviceConnectingWith.asStateFlow()
 
 
     suspend fun scanLeDevice() {
@@ -161,9 +145,7 @@ class BluetoothHelper(private val context: Context) {
         _isScanning.value = true
 
         withContext(Dispatchers.IO) {
-            launch { getPairedDevices() }
             bluetoothLeScanner.startScan(null, scanSettings, scanCallback)
-            _isScanning.value = false
         }
     }
 
@@ -173,11 +155,13 @@ class BluetoothHelper(private val context: Context) {
             if (result.device !in _scannedDevicesFlow.value) {
                 _scannedDevicesFlow.update { it + result.device }
             }
+            _isScanning.value = false
         }
     }
 
     private val connectGattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            _deviceConnectingWith.value = null
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(TAG, "Connected")
                 gatt.discoverServices()
@@ -185,8 +169,6 @@ class BluetoothHelper(private val context: Context) {
                 Log.e(TAG, "Disconnected")
                 gatt.close()
             }
-
-            _devicePairingWith.update { null }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -196,17 +178,36 @@ class BluetoothHelper(private val context: Context) {
                 Log.d(TAG, "onServicesDiscovered received: $status")
             }
         }
+
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int
+        ) {
+            Log.d(TAG,"onCharacteristicRead : ${value.first().toInt()}")
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            Log.d(TAG,"onCharacteristicChanged : ${value.first().toInt()}")
+        }
     }
 
     fun connect(address: String): Boolean {
         bluetoothAdapter?.let { adapter ->
             try {
+                _deviceConnectingWith.value = address
                 val device = adapter.getRemoteDevice(address)
                 bluetoothGatt = device.connectGatt(context, false, connectGattCallback)
                 bluetoothLeScanner.stopScan(scanCallback)
                 return true
             } catch (exception: IllegalArgumentException) {
                 Log.w("Helper", "Device not found with provided address.")
+                _deviceConnectingWith.value = null
                 return false
             }
         } ?: run {
