@@ -2,7 +2,6 @@ package com.yveskalume.bluetoothpoc
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -32,16 +31,41 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yveskalume.bluetoothpoc.ui.theme.BluetoothPOCTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+//    private var bluetoothService: BluetoothService? = null
+//
+//    private val serviceConnection: ServiceConnection = object : ServiceConnection {
+//        override fun onServiceConnected(
+//            componentName: ComponentName,
+//            service: IBinder
+//        ) {
+//            bluetoothService = (service as BluetoothService.LocalBinder).getService()
+//            bluetoothService?.let { bluetooth ->
+//                if (!bluetooth.initialize()) {
+//                    Log.e("MainActivity", "Unable to initialize Bluetooth")
+//                    finish()
+//                }
+//
+//                bluetooth.connect(deviceAddress)
+//
+//            }
+//        }
+//
+//        override fun onServiceDisconnected(componentName: ComponentName) {
+//            bluetoothService = null
+//        }
+//    }
 
     @OptIn(ExperimentalFoundationApi::class)
     @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+//        val gattServiceIntent = Intent(this, BluetoothService::class.java)
+//        bindService(gattServiceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         setContent {
             BluetoothPOCTheme {
@@ -54,7 +78,7 @@ class MainActivity : ComponentActivity() {
                     val scannedDevices by bluetoothHelper.scannedDevicesFlow.collectAsState()
                     val devicePairingWith by bluetoothHelper.devicePairingWith.collectAsState()
 
-                    val isDiscovering by bluetoothHelper.isDiscovering.collectAsState()
+                    val isScanning by bluetoothHelper.isScanning.collectAsState()
 
                     val coroutineScope = rememberCoroutineScope()
 
@@ -87,7 +111,7 @@ class MainActivity : ComponentActivity() {
                                     Text(text = "Device Name: ${device.name}")
                                     Text(text = "Device Address: ${device.address}")
                                     Button(onClick = {
-                                        bluetoothHelper.unPairDevice(device)
+
                                     }) {
                                         Text(text = "Unpair Device")
                                     }
@@ -124,15 +148,7 @@ class MainActivity : ComponentActivity() {
                                         enabled = devicePairingWith == null,
                                         onClick = {
                                             coroutineScope.launch {
-                                                bluetoothHelper.pairDevice(device) {
-                                                    launch(Dispatchers.Main) {
-                                                        Toast.makeText(
-                                                            applicationContext,
-                                                            "Can't connect",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                    }
-                                                }
+                                                bluetoothHelper.connect(device.address)
                                             }
                                         }
                                     ) {
@@ -153,7 +169,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         item {
-                            AnimatedVisibility(visible = isDiscovering) {
+                            AnimatedVisibility(visible = isScanning) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.Center

@@ -5,11 +5,14 @@ import android.annotation.SuppressLint
 import android.app.Activity.RESULT_OK
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -17,22 +20,25 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.UUID
 
 @Composable
 fun rememberBluetoothHelper(): BluetoothHelper {
     val context = LocalContext.current
     val helper = remember { BluetoothHelper(context) }
+
+    val coroutineScope = rememberCoroutineScope()
 
     val permissions = mutableListOf(
         Manifest.permission.BLUETOOTH,
@@ -54,7 +60,9 @@ fun rememberBluetoothHelper(): BluetoothHelper {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (it.resultCode == RESULT_OK) {
-            helper.startDiscovery()
+            coroutineScope.launch {
+                helper.scanLeDevice()
+            }
         } else {
             Toast.makeText(
                 context,
@@ -81,36 +89,38 @@ fun rememberBluetoothHelper(): BluetoothHelper {
         }
     }
 
+    LaunchedEffect(Unit) {
+        helper.scanLeDevice()
+    }
 
 
     LaunchedEffect(Unit) {
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            helper.release()
-        }
-    }
+
     return helper
 }
 
 @SuppressLint("MissingPermission")
 class BluetoothHelper(private val context: Context) {
 
-    private val bluetoothManager by lazy {
-        context.getSystemService(BluetoothManager::class.java)
+    private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
+    private val bluetoothAdapter = bluetoothManager.adapter
+
+    private val bluetoothLeScanner by lazy {
+        bluetoothAdapter.bluetoothLeScanner
     }
-    private val bluetoothAdapter by lazy {
-        bluetoothManager.adapter
-    }
+
+    lateinit var bluetoothGatt: BluetoothGatt
+
 
     val isBluetoothEnabled: Boolean
         get() = bluetoothAdapter.isEnabled
 
 
-    private val _isDiscovering = MutableStateFlow(bluetoothAdapter.isDiscovering)
-    val isDiscovering: StateFlow<Boolean> = _isDiscovering.asStateFlow()
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
     private val _pairedDevicesFlow = MutableStateFlow<Set<BluetoothDevice>>(emptySet())
     val pairedDevicesFlow: StateFlow<Set<BluetoothDevice>> = _pairedDevicesFlow.asStateFlow()
@@ -122,32 +132,6 @@ class BluetoothHelper(private val context: Context) {
     private val _devicePairingWith = MutableStateFlow<String?>(null)
     val devicePairingWith: StateFlow<String?> = _devicePairingWith.asStateFlow()
 
-    private val receiver = object : BroadcastReceiver() {
-
-        override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                BluetoothDevice.ACTION_FOUND -> {
-                    if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                        val device: BluetoothDevice? =
-                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                        if (device != null) {
-                            _scannedDevicesFlow.update { devices ->
-                                if (device in devices) devices else devices + device
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    init {
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        context.registerReceiver(receiver, filter)
-
-        startDiscovery()
-    }
-
     private fun getPairedDevices() {
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
             return
@@ -158,59 +142,64 @@ class BluetoothHelper(private val context: Context) {
         }
     }
 
-    fun unPairDevice(device: BluetoothDevice) {
-
+    fun unpairDevice(device: BluetoothDevice) {
+        device.createBond()
     }
 
-    suspend fun pairDevice(device: BluetoothDevice,onFailure: () -> Unit) {
-        return withContext(Dispatchers.IO) {
-            try {
-                _devicePairingWith.update { device.address }
-                val bluetoothSocket = device
-                    .createRfcommSocketToServiceRecord(UUID.fromString("27b7d1da-08c7-4505-a6d1-2459987e5e2d"))
-                cancelDiscovery()
-                bluetoothSocket.connect()
 
-            } catch (e: Exception) {
-                Log.e("BluetoothHelper", e.toString())
-                onFailure()
-            } finally {
-                _devicePairingWith.update { null }
+    suspend fun scanLeDevice() {
+        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
+            return
+        }
+        if (!bluetoothAdapter.isEnabled) {
+            return
+        }
+        _isScanning.value = true
+
+        withContext(Dispatchers.IO) {
+            launch { getPairedDevices() }
+            bluetoothLeScanner.startScan(scanCallback)
+            delay(20000)
+            bluetoothLeScanner.stopScan(scanCallback)
+            _isScanning.value = false
+        }
+    }
+
+    private val scanCallback: ScanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            super.onScanResult(callbackType, result)
+            if (result.device !in _scannedDevicesFlow.value) {
+                _scannedDevicesFlow.update { it + result.device }
             }
         }
     }
 
-    fun startDiscovery() {
-        _isDiscovering.update { true }
+    private val connectGattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.e("Helper", "Connected")
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.e("Helper", "Disconnected")
+            }
 
-        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
-            return
+            _devicePairingWith.update { null }
         }
-
-        context.registerReceiver(
-            receiver,
-            IntentFilter(BluetoothDevice.ACTION_FOUND)
-        )
-
-
-        getPairedDevices()
-
-        bluetoothAdapter.startDiscovery()
-        _isDiscovering.update { bluetoothAdapter.isDiscovering }
     }
 
-
-    private fun cancelDiscovery() {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
-            return
+    fun connect(address: String): Boolean {
+        bluetoothAdapter?.let { adapter ->
+            try {
+                val device = adapter.getRemoteDevice(address)
+                bluetoothGatt = device.connectGatt(context, false, connectGattCallback)
+                return true
+            } catch (exception: IllegalArgumentException) {
+                Log.w("Helper", "Device not found with provided address.")
+                return false
+            }
+        } ?: run {
+            Log.w("Helper", "BluetoothAdapter not initialized")
+            return false
         }
-
-        bluetoothAdapter.cancelDiscovery()
-        _isDiscovering.update { bluetoothAdapter.isDiscovering }
-    }
-
-    fun release() {
-        context.unregisterReceiver(receiver)
     }
 
     private fun hasPermission(permission: String): Boolean {
